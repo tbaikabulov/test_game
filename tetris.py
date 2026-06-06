@@ -17,28 +17,32 @@ HEIGHT = ROWS * BLOCK
 FPS = 60
 LOCK_MS = 500
 MAX_LOCK_MOVES = 15
+LINE_FLASH_MS = 180
+HIGHSCORE_FILE = "highscore.txt"
 SCORE_TABLE = {0: 0, 1: 100, 2: 300, 3: 500, 4: 800}
 
 COLORS = {
-    "bg": (15, 17, 23),
-    "panel": (26, 29, 39),
-    "panel2": (37, 42, 56),
-    "border": (58, 65, 88),
-    "text": (232, 236, 244),
-    "muted": (139, 147, 168),
-    "accent": (91, 140, 255),
-    "grid": (255, 255, 255, 12),
-    "ghost": (255, 255, 255, 55),
+    "bg": (18, 6, 8),
+    "panel": (38, 10, 14),
+    "panel2": (52, 16, 20),
+    "board": (12, 4, 6),
+    "border": (110, 28, 36),
+    "text": (255, 215, 215),
+    "muted": (175, 110, 115),
+    "accent": (220, 45, 58),
+    "highlight": (255, 180, 180),
+    "grid": (255, 80, 90, 18),
+    "flash": (255, 120, 130),
 }
 
 SHAPES = {
-    "I": {"color": (0, 229, 255), "matrix": [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]]},
-    "O": {"color": (255, 213, 79), "matrix": [[1, 1], [1, 1]]},
-    "T": {"color": (179, 136, 255), "matrix": [[0, 1, 0], [1, 1, 1], [0, 0, 0]]},
-    "S": {"color": (105, 240, 174), "matrix": [[0, 1, 1], [1, 1, 0], [0, 0, 0]]},
-    "Z": {"color": (255, 82, 82), "matrix": [[1, 1, 0], [0, 1, 1], [0, 0, 0]]},
-    "J": {"color": (68, 138, 255), "matrix": [[1, 0, 0], [1, 1, 1], [0, 0, 0]]},
-    "L": {"color": (255, 145, 0), "matrix": [[0, 0, 1], [1, 1, 1], [0, 0, 0]]},
+    "I": {"color": (255, 95, 95), "matrix": [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]]},
+    "O": {"color": (210, 35, 48), "matrix": [[1, 1], [1, 1]]},
+    "T": {"color": (175, 18, 35), "matrix": [[0, 1, 0], [1, 1, 1], [0, 0, 0]]},
+    "S": {"color": (255, 55, 75), "matrix": [[0, 1, 1], [1, 1, 0], [0, 0, 0]]},
+    "Z": {"color": (130, 12, 22), "matrix": [[1, 1, 0], [0, 1, 1], [0, 0, 0]]},
+    "J": {"color": (235, 75, 85), "matrix": [[1, 0, 0], [1, 1, 1], [0, 0, 0]]},
+    "L": {"color": (255, 135, 125), "matrix": [[0, 0, 1], [1, 1, 1], [0, 0, 0]]},
 }
 
 PIECE_TYPES = list(SHAPES.keys())
@@ -83,6 +87,8 @@ class GameState:
     lock_started: Optional[int] = None
     lock_moves: int = 0
     soft_drop: bool = False
+    high_score: int = 0
+    line_flash_until: int = 0
 
 
 def rotate_matrix(matrix: List[List[int]]) -> List[List[int]]:
@@ -109,6 +115,26 @@ def collides(board: list, piece: Piece, dx: int = 0, dy: int = 0, matrix: Option
     return False
 
 
+def load_high_score() -> int:
+    try:
+        with open(HIGHSCORE_FILE, encoding="utf-8") as file:
+            return max(0, int(file.read().strip()))
+    except (FileNotFoundError, ValueError):
+        return 0
+
+
+def save_high_score(score: int) -> None:
+    with open(HIGHSCORE_FILE, "w", encoding="utf-8") as file:
+        file.write(str(score))
+
+
+def end_game(state: GameState) -> None:
+    state.status = "gameover"
+    if state.score > state.high_score:
+        state.high_score = state.score
+        save_high_score(state.high_score)
+
+
 def ghost_y(board: list, piece: Piece) -> int:
     y = piece.y
     while not collides(board, piece, dy=y - piece.y + 1):
@@ -123,7 +149,7 @@ def spawn_piece(state: GameState) -> None:
     state.lock_started = None
     state.lock_moves = 0
     if state.current and collides(state.board, state.current):
-        state.status = "gameover"
+        end_game(state)
 
 
 def clear_lines(state: GameState) -> None:
@@ -142,6 +168,7 @@ def clear_lines(state: GameState) -> None:
         state.score += SCORE_TABLE.get(cleared, 800) * state.level
         state.level = state.lines // 10 + 1
         state.drop_interval = max(100, 1000 - (state.level - 1) * 80)
+        state.line_flash_until = pygame.time.get_ticks() + LINE_FLASH_MS
 
 
 def lock_piece(state: GameState) -> None:
@@ -156,7 +183,7 @@ def lock_piece(state: GameState) -> None:
             board_y = piece.y + y
             board_x = piece.x + x
             if board_y < 0:
-                state.status = "gameover"
+                end_game(state)
                 return
             state.board[board_y][board_x] = piece.color
 
@@ -229,7 +256,7 @@ def hold_piece(state: GameState) -> None:
     state.lock_moves = 0
 
     if collides(state.board, state.current):
-        state.status = "gameover"
+        end_game(state)
 
 
 def handle_grounded(state: GameState) -> None:
@@ -255,6 +282,8 @@ def start_game(state: GameState) -> None:
     state.lock_started = None
     state.lock_moves = 0
     state.soft_drop = False
+    state.line_flash_until = 0
+    state.high_score = load_high_score()
     state.status = "playing"
     spawn_piece(state)
 
@@ -288,7 +317,7 @@ def draw_block(surface: pygame.Surface, px: int, py: int, color: Tuple[int, int,
     block = pygame.Surface((size - 2, size - 2), pygame.SRCALPHA)
     block.fill((*color, alpha))
     highlight = pygame.Surface((size - 2, 4), pygame.SRCALPHA)
-    highlight.fill((255, 255, 255, 45 if alpha == 255 else 20))
+    highlight.fill((*COLORS["highlight"], 45 if alpha == 255 else 20))
     block.blit(highlight, (0, 0))
     surface.blit(block, rect.topleft)
 
@@ -322,7 +351,7 @@ def draw_preview(surface: pygame.Surface, piece: Optional[Piece], rect: pygame.R
             if cell:
                 block_rect = pygame.Rect(offset_x + x * size + 1, offset_y + y * size + 1, size - 2, size - 2)
                 pygame.draw.rect(surface, piece.color, block_rect, border_radius=3)
-                pygame.draw.rect(surface, (255, 255, 255, 40), block_rect.inflate(-block_rect.width + 4, -block_rect.height + 4))
+                pygame.draw.rect(surface, (*COLORS["highlight"], 40), block_rect.inflate(-block_rect.width + 4, -block_rect.height + 4))
 
 
 def draw_text(surface: pygame.Surface, font: pygame.font.Font, text: str, pos: Tuple[int, int], color: Tuple[int, int, int]) -> None:
@@ -337,10 +366,15 @@ def draw_sidebar(surface: pygame.Surface, state: GameState, fonts: Dict[str, pyg
         pygame.draw.rect(surface, COLORS["border"], panel, 1, border_radius=14)
 
     y = 36
-    for label, value in (("Счёт", str(state.score)), ("Уровень", str(state.level)), ("Линии", str(state.lines))):
+    for label, value in (
+        ("Счёт", str(state.score)),
+        ("Рекорд", str(state.high_score)),
+        ("Уровень", str(state.level)),
+        ("Линии", str(state.lines)),
+    ):
         draw_text(surface, fonts["label"], label, (36, y), COLORS["muted"])
         draw_text(surface, fonts["value"], value, (36, y + 22), COLORS["text"])
-        y += 72
+        y += 60
 
     draw_text(surface, fonts["label"], "Следующая", (36, y), COLORS["muted"])
     draw_preview(surface, state.next_piece, pygame.Rect(36, y + 24, 120, 120))
@@ -358,6 +392,7 @@ def draw_sidebar(surface: pygame.Surface, state: GameState, fonts: Dict[str, pyg
         "C — удержание",
         "P — пауза",
         "Enter — старт",
+        "R — рестарт",
         "Esc — выход",
     ]
     cy = 40
@@ -370,10 +405,10 @@ def draw_sidebar(surface: pygame.Surface, state: GameState, fonts: Dict[str, pyg
 
 def draw_board(surface: pygame.Surface, state: GameState) -> None:
     board_rect = pygame.Rect(SIDEBAR, 0, COLS * BLOCK, ROWS * BLOCK)
-    pygame.draw.rect(surface, (10, 12, 18), board_rect)
+    pygame.draw.rect(surface, COLORS["board"], board_rect)
     pygame.draw.rect(surface, COLORS["border"], board_rect, 2)
 
-    grid_color = (255, 255, 255, 12)
+    grid_color = COLORS["grid"]
     for x in range(COLS + 1):
         pygame.draw.line(surface, grid_color, (SIDEBAR + x * BLOCK, 0), (SIDEBAR + x * BLOCK, HEIGHT))
     for y in range(ROWS + 1):
@@ -390,13 +425,20 @@ def draw_board(surface: pygame.Surface, state: GameState) -> None:
         draw_piece(surface, ghost, SIDEBAR, 0, alpha=70)
         draw_piece(surface, state.current, SIDEBAR, 0)
 
+    now = pygame.time.get_ticks()
+    if now < state.line_flash_until:
+        flash = pygame.Surface((COLS * BLOCK, HEIGHT), pygame.SRCALPHA)
+        alpha = int(90 * (state.line_flash_until - now) / LINE_FLASH_MS)
+        flash.fill((*COLORS["flash"], alpha))
+        surface.blit(flash, (SIDEBAR, 0))
+
 
 def draw_overlay(surface: pygame.Surface, state: GameState, fonts: Dict[str, pygame.font.Font]) -> None:
     if state.status == "playing":
         return
 
     overlay = pygame.Surface((COLS * BLOCK, HEIGHT), pygame.SRCALPHA)
-    overlay.fill((10, 12, 18, 210))
+    overlay.fill((*COLORS["board"], 210))
     surface.blit(overlay, (SIDEBAR, 0))
 
     if state.status == "idle":
@@ -404,7 +446,8 @@ def draw_overlay(surface: pygame.Surface, state: GameState, fonts: Dict[str, pyg
     elif state.status == "paused":
         title, subtitle, button = "Пауза", "Нажмите P, чтобы продолжить", ""
     else:
-        title, subtitle, button = "Игра окончена", f"Счёт: {state.score}", "Enter — заново"
+        subtitle = f"Счёт: {state.score} | Рекорд: {state.high_score}"
+        title, button = "Игра окончена", "Enter — заново"
 
     title_surf = fonts["overlay_title"].render(title, True, COLORS["text"])
     subtitle_surf = fonts["overlay_text"].render(subtitle, True, COLORS["muted"])
@@ -415,7 +458,7 @@ def draw_overlay(surface: pygame.Surface, state: GameState, fonts: Dict[str, pyg
         btn_rect = pygame.Rect(0, 0, 160, 44)
         btn_rect.center = (SIDEBAR + COLS * BLOCK // 2, HEIGHT // 2 + 56)
         pygame.draw.rect(surface, COLORS["accent"], btn_rect, border_radius=10)
-        btn_text = fonts["button"].render(button, True, (255, 255, 255))
+        btn_text = fonts["button"].render(button, True, COLORS["text"])
         surface.blit(btn_text, btn_text.get_rect(center=btn_rect.center))
 
 
@@ -424,8 +467,8 @@ def handle_key(state: GameState, event: pygame.event.Event) -> None:
         pygame.quit()
         sys.exit()
 
-    if event.key == pygame.K_RETURN:
-        if state.status in ("idle", "gameover"):
+    if event.key in (pygame.K_RETURN, pygame.K_r):
+        if state.status in ("idle", "gameover", "playing", "paused"):
             start_game(state)
         return
 
@@ -468,6 +511,7 @@ def main() -> None:
     }
 
     state = GameState()
+    state.high_score = load_high_score()
     state.next_piece = Piece.create(random.choice(PIECE_TYPES))
 
     running = True
@@ -498,5 +542,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-# command to run the game: python tetris.py
